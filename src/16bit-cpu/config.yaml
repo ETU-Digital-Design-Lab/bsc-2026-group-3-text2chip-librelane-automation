@@ -1,0 +1,138 @@
+# ═══════════════════════════════════════════════════════════════════════════════
+# 16-BIT SIMPLE CPU - OpenLane ASIC Konfigürasyonu
+# Sky130 PDK için optimize edilmiş ayarlar
+# ═══════════════════════════════════════════════════════════════════════════════
+
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ AŞAMA 0: TEMEL TASARIM BİLGİLERİ                                            │
+# └─────────────────────────────────────────────────────────────────────────────┘
+DESIGN_NAME: simple16_system
+
+VERILOG_FILES:
+  - src/cpu/alu.v
+  - src/cpu/simple16_cpu.v
+  - src/mem/instr_mem.v
+  - src/mem/data_mem.v
+  - src/top/simple16_system.v
+
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ AŞAMA 1: CLOCK (SAAT SİNYALİ) KISITLAMALARI                                 │
+# │ - CLOCK_PERIOD: Düşük = daha hızlı ama daha zor timing closure              │
+# │ - 10ns = 100MHz, 5ns = 200MHz                                               │
+# └─────────────────────────────────────────────────────────────────────────────┘
+CLOCK_PORT: clk
+CLOCK_PERIOD: 10.0  # ns - 100MHz hedef frekans
+
+# ┌─────────────────────────────────────────────────────────────────────────────┐
+# │ SKY130A PDK SPESİFİK AYARLAR                                                │
+# └─────────────────────────────────────────────────────────────────────────────┘
+pdk::sky130A:
+  
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 2: STANDART HÜCRE KÜTÜPHANESİ SEÇİMİ
+  # ═══════════════════════════════════════════════════════════════════════════
+  # Seçenekler:
+  #   - sky130_fd_sc_hd   : High Density (varsayılan, küçük alan)
+  #   - sky130_fd_sc_hs   : High Speed (daha hızlı, daha büyük)
+  #   - sky130_fd_sc_ms   : Medium Speed (dengeli)
+  #   - sky130_fd_sc_ls   : Low Speed (düşük güç tüketimi)
+  #   - sky130_fd_sc_hdll : High Density Low Leakage
+  # ═══════════════════════════════════════════════════════════════════════════
+  STD_CELL_LIBRARY: sky130_fd_sc_hd
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 3: SENTEZ (SYNTHESIS) KISITLAMALARI
+  # ═══════════════════════════════════════════════════════════════════════════
+  # MAX_FANOUT_CONSTRAINT: Bir çıkışın besleyebileceği maksimum giriş sayısı
+  #   - Düşük değer = daha iyi timing, daha fazla buffer
+  #   - Yüksek değer = daha az alan, potansiyel timing sorunları
+  # 
+  # CLOCK_UNCERTAINTY_CONSTRAINT: Saat belirsizliği (jitter + skew)
+  #   - Genelde clock period'un %2-5'i
+  # 
+  # SYNTH_STRATEGY: Sentez optimizasyon stratejisi
+  #   - AREA 0-3: Alan optimizasyonu (0 = en agresif)
+  #   - DELAY 0-4: Hız optimizasyonu (0 = en agresif)
+  # ═══════════════════════════════════════════════════════════════════════════
+  MAX_FANOUT_CONSTRAINT: 6
+  CLOCK_UNCERTAINTY_CONSTRAINT: 0.2  # ns
+  SYNTH_STRATEGY: "AREA 0"  # Maksimum alan küçültme
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 4: FLOORPLANNING (ÇİP YERLEŞİM PLANI)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # FP_SIZING: "relative" veya "absolute"
+  #   - relative: Otomatik boyut hesaplama
+  #   - absolute: Manuel DIE_AREA ve CORE_AREA belirleme
+  #
+  # DIE_AREA: Toplam çip alanı [x0, y0, x1, y1] (µm) - LİSTE FORMATI
+  # CORE_AREA: Logic yerleşim alanı [x0, y0, x1, y1] (µm)
+  #   - Die kenarlarından 10-20µm boşluk bırakılmalı (I/O için)
+  #
+  # FP_CORE_UTIL: Çekirdek kullanım oranı (%)
+  #   - %30-40: Rahat routing, iyi timing
+  #   - %50-60: Dengeli
+  #   - %70+: Agresif, routing zor olabilir
+  #
+  # FP_ASPECT_RATIO: En/boy oranı
+  #   - 1 = kare çip
+  #   - 2 = dikdörtgen (genişlik = 2 * yükseklik)
+  # ═══════════════════════════════════════════════════════════════════════════
+  FP_SIZING: absolute
+  DIE_AREA: [0, 0, 150, 150]      # 150x150 µm toplam alan (liste formatı)
+  CORE_AREA: [10, 10, 140, 140]   # 130x130 µm aktif alan
+  FP_CORE_UTIL: 50                # %50 kullanım (küçük tasarım için uygun)
+  FP_ASPECT_RATIO: 1              # Kare çip
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 5: PLACEMENT (YERLEŞTİRME) KISITLAMALARI
+  # ═══════════════════════════════════════════════════════════════════════════
+  # PL_TARGET_DENSITY_PCT: Hedef yerleştirme yoğunluğu
+  #   - FP_CORE_UTIL'den biraz yüksek olmalı
+  #   - Çok yüksek = routing congestion
+  #
+  # PL_ROUTABILITY_DRIVEN: Routing-aware yerleştirme
+  #   - true = aktif (önerilir)
+  #
+  # PL_TIME_DRIVEN: Timing-aware yerleştirme
+  #   - true = kritik yolları optimize et
+  # ═══════════════════════════════════════════════════════════════════════════
+  PL_TARGET_DENSITY_PCT: 55
+  PL_ROUTABILITY_DRIVEN: true
+  PL_TIME_DRIVEN: true
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 6: CLOCK TREE SYNTHESIS (CTS)
+  # ═══════════════════════════════════════════════════════════════════════════
+  # RUN_CTS: Clock Tree Synthesis çalıştır
+  #
+  # CTS_CLK_MAX_WIRE_LENGTH: Clock ağacında maksimum tel uzunluğu (µm)
+  #   - Kısa = daha iyi skew, daha fazla buffer
+  # ═══════════════════════════════════════════════════════════════════════════
+  RUN_CTS: true
+  CTS_CLK_MAX_WIRE_LENGTH: 200
+
+  # ═══════════════════════════════════════════════════════════════════════════
+  # AŞAMA 7: ROUTING (BAĞLANTI) KISITLAMALARI
+  # ═══════════════════════════════════════════════════════════════════════════
+  # DRT_THREADS: Paralel routing için thread sayısı
+  #   - CPU çekirdeğinize göre ayarlayın
+  #
+  # DRT_OPT_ITERS: Detaylı routing optimizasyon iterasyonu
+  #   - Yüksek = daha iyi sonuç, daha uzun süre
+  #
+  # GRT_ALLOW_CONGESTION: Global routing tıkanıklığa izin ver
+  #   - false = daha güvenli (önerilir)
+  # ═══════════════════════════════════════════════════════════════════════════
+  DRT_THREADS: 4
+  DRT_OPT_ITERS: 64
+  GRT_ALLOW_CONGESTION: false
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# TAHMİNİ SONUÇLAR (16 kelime RAM ile):
+# ═══════════════════════════════════════════════════════════════════════════════
+# - Flip-flop sayısı  : ~340 (16x16 RAM + CPU regs)
+# - Toplam alan       : ~150x150 µm = 22,500 µm²
+# - Hedef frekans     : 100 MHz
+# - Teknoloji         : Sky130 (130nm)
+# ═══════════════════════════════════════════════════════════════════════════════
