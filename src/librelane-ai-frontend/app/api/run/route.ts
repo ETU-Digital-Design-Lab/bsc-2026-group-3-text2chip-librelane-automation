@@ -1,0 +1,71 @@
+// POST /api/run  body: { project_id, action, design_name?, args? } → backend POST /run
+
+import type { NextRequest } from "next/server";
+import { getFileServiceBase } from "@/lib/file-service";
+import { describeUpstreamFetchFailure } from "@/lib/upstream-fetch-error";
+
+export async function POST(request: NextRequest) {
+  let body: {
+    project_id?: string;
+    action?: string;
+    design_name?: string;
+    args?: string[];
+    input_files?: string[];
+    flow_steps?: string[];
+  };
+  try {
+    body = (await request.json()) as {
+      project_id?: string;
+      action?: string;
+      design_name?: string;
+      args?: string[];
+      input_files?: string[];
+      flow_steps?: string[];
+    };
+  } catch {
+    return Response.json({ error: "geçersiz JSON gövdesi" }, { status: 400 });
+  }
+
+  const projectId = body.project_id?.trim();
+  const action = body.action?.trim();
+  if (!projectId || !action) {
+    return Response.json({ error: "project_id ve action zorunlu" }, { status: 400 });
+  }
+
+  const payload: {
+    project_id: string;
+    action: string;
+    design_name?: string;
+    args?: string[];
+    input_files?: string[];
+    flow_steps?: string[];
+  } = { project_id: projectId, action };
+  const designName = body.design_name?.trim();
+  if (designName) payload.design_name = designName;
+  if (Array.isArray(body.args) && body.args.length > 0) payload.args = body.args;
+  if (Array.isArray(body.input_files) && body.input_files.length > 0) {
+    payload.input_files = body.input_files;
+  }
+  if (Array.isArray(body.flow_steps) && body.flow_steps.length > 0) {
+    payload.flow_steps = body.flow_steps;
+  }
+
+  const base = getFileServiceBase();
+  const upstream = `${base}/run`;
+  try {
+    const res = await fetch(upstream, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      cache: "no-store",
+    });
+    const data: unknown = await res.json().catch(() => ({}));
+    return Response.json(data, { status: res.status });
+  } catch (err) {
+    const d = describeUpstreamFetchFailure(err, upstream);
+    return Response.json(
+      { error: d.message, causes: d.causes, code: d.code, hint: d.hint, upstream },
+      { status: 502 }
+    );
+  }
+}

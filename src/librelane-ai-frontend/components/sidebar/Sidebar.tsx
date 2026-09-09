@@ -1,0 +1,555 @@
+"use client";
+
+import { useState, useEffect, useRef } from "react";
+import {
+  FolderOpen,
+  Plus,
+  Settings2,
+  ChevronRight,
+  Cpu,
+  Trash2,
+  ChevronDown,
+  Files,
+  AlertTriangle,
+  Loader2,
+  Layers,
+  FileCode,
+  Check,
+  X,
+} from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  getProjects,
+  saveProjects,
+  getActiveProjectId,
+  saveActiveProjectId,
+} from "@/lib/store";
+import type { Project, FileNode } from "@/lib/types";
+import { toBucketName } from "@/lib/types";
+import { FileAPI } from "@/lib/api";
+import FileBrowser from "./FileBrowser";
+
+interface SidebarProps {
+  activeProjectId: string;
+  width?: number;
+  onProjectChange: (id: string) => void;
+  onOpenFile: (node: FileNode, bucket: string) => void;
+  onOpenOllamaSettings: () => void;
+  onOpenSystemMetrics: () => void;
+}
+
+interface CollapsibleSectionProps {
+  title: string;
+  icon: React.ReactNode;
+  defaultOpen?: boolean;
+  children: React.ReactNode;
+  action?: React.ReactNode;
+}
+
+function CollapsibleSection({ title, icon, defaultOpen = true, children, action }: CollapsibleSectionProps) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-[#30363d]">
+      <div className="group flex w-full items-center justify-between gap-1 px-4 py-2.5 transition-colors hover:bg-white/3">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          className="flex min-w-0 flex-1 items-center gap-1.5 text-left"
+        >
+          <span className="text-slate-500">{icon}</span>
+          <span className="text-[10px] font-semibold uppercase tracking-widest text-slate-500 group-hover:text-slate-400">
+            {title}
+          </span>
+        </button>
+        <div className="flex flex-shrink-0 items-center gap-1">
+          {action}
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            className="flex h-5 w-5 items-center justify-center rounded text-slate-600 transition-colors hover:bg-white/8"
+          >
+            <ChevronDown className={cn("h-3 w-3 transition-transform", open ? "rotate-0" : "-rotate-90")} />
+          </button>
+        </div>
+      </div>
+      {open && <div className="pb-2">{children}</div>}
+    </div>
+  );
+}
+
+interface DeleteDialogProps {
+  project: Project;
+  onConfirm: () => void;
+  onCancel: () => void;
+  deleting: boolean;
+}
+
+function DeleteDialog({ project, onConfirm, onCancel, deleting }: DeleteDialogProps) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
+      <div className="w-80 rounded-xl border border-rose-500/30 bg-[#0d1117] p-5 shadow-2xl">
+        <div className="mb-3 flex items-center gap-2 text-rose-400">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          <span className="text-sm font-semibold">Projeyi Sil</span>
+        </div>
+        <p className="mb-1 text-xs text-slate-300">
+          <span className="font-medium text-white">{project.name}</span> projesi ve workspace klasörü{" "}
+          <span className="font-medium text-rose-400">{project.bucket}</span> kalıcı olarak silinecek.
+        </p>
+        <p className="mb-4 text-xs text-slate-500">Tüm dosyalar geri alınamaz şekilde silinir.</p>
+        <div className="flex gap-2">
+          <button
+            onClick={onConfirm}
+            disabled={deleting}
+            className="flex-1 rounded-lg bg-rose-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-rose-500 disabled:opacity-50 transition-colors"
+          >
+            {deleting ? "Siliniyor..." : "Evet, Sil"}
+          </button>
+          <button
+            onClick={onCancel}
+            disabled={deleting}
+            className="flex-1 rounded-lg bg-white/5 px-3 py-1.5 text-xs text-slate-300 hover:bg-white/10 disabled:opacity-50 transition-colors"
+          >
+            İptal
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+type ProjectTemplate = "caravel" | "verilog";
+
+interface NewProjectDialogProps {
+  onCreate: (name: string, template: ProjectTemplate) => void;
+  onCancel: () => void;
+  creating: boolean;
+  error: string | null;
+}
+
+const TEMPLATE_OPTIONS: {
+  id: ProjectTemplate;
+  title: string;
+  description: string;
+  icon: React.ReactNode;
+}[] = [
+  {
+    id: "caravel",
+    title: "Caravel Wishbone arayüzü",
+    description: "Efabless Caravel user_project_wrapper + OpenLane iskeleti (tape-out yolu).",
+    icon: <Layers className="h-5 w-5" />,
+  },
+  {
+    id: "verilog",
+    title: "Sadece Verilog",
+    description: "Sade RTL + testbench + Makefile. OpenLane/Caravel dosyası yok.",
+    icon: <FileCode className="h-5 w-5" />,
+  },
+];
+
+function NewProjectDialog({ onCreate, onCancel, creating, error }: NewProjectDialogProps) {
+  const [name, setName] = useState("");
+  const [template, setTemplate] = useState<ProjectTemplate>("caravel");
+  const nameRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    nameRef.current?.focus();
+  }, []);
+
+  const trimmed = name.trim();
+
+  function submit() {
+    if (!trimmed || creating) return;
+    onCreate(trimmed, template);
+  }
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+      onClick={onCancel}
+      onKeyDown={(e) => {
+        if (e.key === "Escape") onCancel();
+      }}
+    >
+      <div
+        className="w-[min(460px,92vw)] rounded-2xl border border-violet-500/30 bg-[#0d1117]/95 p-6 shadow-2xl backdrop-blur-md"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center justify-between">
+          <div className="flex items-center gap-2 text-violet-300">
+            <Plus className="h-4 w-4 flex-shrink-0" />
+            <span className="text-sm font-semibold">Yeni Proje</span>
+          </div>
+          <button
+            type="button"
+            onClick={onCancel}
+            className="flex h-6 w-6 items-center justify-center rounded text-slate-500 transition-colors hover:bg-white/8 hover:text-slate-300"
+            title="Kapat"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <label className="mb-1.5 block text-[11px] font-medium uppercase tracking-wider text-slate-500">
+          Proje adı
+        </label>
+        <input
+          ref={nameRef}
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") submit();
+          }}
+          placeholder="Örn. Simple16 CPU"
+          className="w-full rounded-lg border border-violet-500/40 bg-violet-500/10 px-3 py-2 text-sm text-white placeholder-slate-500 outline-none focus:border-violet-400"
+        />
+        {trimmed && (
+          <p className="mt-1 text-[10px] text-slate-600">
+            bucket: <span className="text-slate-500">{toBucketName(name)}</span>
+          </p>
+        )}
+
+        <p className="mb-2 mt-4 text-[11px] font-medium uppercase tracking-wider text-slate-500">
+          Başlangıç şablonu
+        </p>
+        <div className="space-y-2">
+          {TEMPLATE_OPTIONS.map((opt) => {
+            const selected = template === opt.id;
+            return (
+              <button
+                key={opt.id}
+                type="button"
+                onClick={() => setTemplate(opt.id)}
+                className={cn(
+                  "flex w-full items-start gap-3 rounded-xl border px-3 py-3 text-left transition-all",
+                  selected
+                    ? "border-violet-500/60 bg-violet-500/10"
+                    : "border-white/8 bg-white/3 hover:border-violet-500/30 hover:bg-white/5"
+                )}
+              >
+                <span
+                  className={cn(
+                    "mt-0.5 flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-lg",
+                    selected ? "bg-violet-600 text-white" : "bg-white/5 text-slate-400"
+                  )}
+                >
+                  {opt.icon}
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-2">
+                    <span className={cn("text-sm font-medium", selected ? "text-violet-200" : "text-slate-200")}>
+                      {opt.title}
+                    </span>
+                    {selected && <Check className="h-3.5 w-3.5 flex-shrink-0 text-violet-400" />}
+                  </span>
+                  <span className="mt-0.5 block text-[11px] leading-relaxed text-slate-500">
+                    {opt.description}
+                  </span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        {error && <p className="mt-3 text-[11px] text-rose-400">{error}</p>}
+
+        <div className="mt-5 flex gap-2">
+          <button
+            type="button"
+            onClick={submit}
+            disabled={!trimmed || creating}
+            className="flex-1 rounded-lg bg-violet-600 px-3 py-2 text-sm font-medium text-white transition-colors hover:bg-violet-500 disabled:opacity-50"
+          >
+            {creating ? "Oluşturuluyor..." : "Oluştur"}
+          </button>
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={creating}
+            className="flex-1 rounded-lg bg-white/5 px-3 py-2 text-sm text-slate-300 transition-colors hover:bg-white/10 disabled:opacity-50"
+          >
+            İptal
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function bucketToDisplayName(bucket: string): string {
+  return bucket
+    .split("-")
+    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
+    .join(" ");
+}
+
+export default function Sidebar({
+  activeProjectId,
+  width = 256,
+  onProjectChange,
+  onOpenFile,
+  onOpenOllamaSettings,
+  onOpenSystemMetrics,
+}: SidebarProps) {
+  const [projects, setProjects] = useState<Project[]>([]);
+  const [loadingProjects, setLoadingProjects] = useState(true);
+  const [showNewProject, setShowNewProject] = useState(false);
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<Project | null>(null);
+  const [deleting, setDeleting] = useState(false);
+
+  useEffect(() => {
+    loadProjectsFromWorkspace();
+  }, []);
+
+  async function loadProjectsFromWorkspace() {
+    setLoadingProjects(true);
+    try {
+      const projectsOnDisk = await FileAPI.listProjects();
+      const stored = getProjects();
+      const workspaceNames = new Set(projectsOnDisk.map((project) => project.name));
+
+      const surviving = stored.filter((p) => workspaceNames.has(p.bucket));
+      const survivingBuckets = new Set(surviving.map((p) => p.bucket));
+
+      const newFromWorkspace: Project[] = projectsOnDisk
+        .filter((project) => !survivingBuckets.has(project.name))
+        .map((project) => ({
+          id: `proj-${project.name}`,
+          name: bucketToDisplayName(project.name),
+          bucket: project.name,
+          createdAt: project.createdAt,
+        }));
+
+      const merged = [...surviving, ...newFromWorkspace];
+      setProjects(merged);
+      saveProjects(merged);
+
+      const currentId = getActiveProjectId();
+      if (!merged.find((p) => p.id === currentId) && merged.length > 0) {
+        onProjectChange(merged[0].id);
+        saveActiveProjectId(merged[0].id);
+      }
+    } catch {
+      const stored = getProjects();
+      setProjects(stored);
+    } finally {
+      setLoadingProjects(false);
+    }
+  }
+
+  const activeProject = projects.find((p) => p.id === activeProjectId);
+
+  async function handleCreateProject(name: string, template: ProjectTemplate) {
+    if (!name || creating) return;
+    const bucket = toBucketName(name);
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await FileAPI.createProject(bucket, template);
+      const newProject: Project = {
+        id: `proj-${Date.now()}`,
+        name,
+        bucket,
+        createdAt: new Date().toISOString(),
+      };
+      const updated = [newProject, ...projects];
+      setProjects(updated);
+      saveProjects(updated);
+      onProjectChange(newProject.id);
+      saveActiveProjectId(newProject.id);
+      setShowNewProject(false);
+      loadProjectsFromWorkspace();
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setCreating(false);
+    }
+  }
+
+  async function handleConfirmDelete() {
+    if (!deleteTarget || deleting) return;
+    setDeleting(true);
+    try {
+      await FileAPI.deleteProject(deleteTarget.bucket);
+    } catch {
+      // bucket might not exist
+    }
+    const updated = projects.filter((p) => p.id !== deleteTarget.id);
+    setProjects(updated);
+    saveProjects(updated);
+    if (activeProjectId === deleteTarget.id) {
+      const next = updated[0];
+      onProjectChange(next?.id ?? "");
+      saveActiveProjectId(next?.id ?? "");
+    }
+    setDeleteTarget(null);
+    setDeleting(false);
+  }
+
+  return (
+    <>
+      {deleteTarget && (
+        <DeleteDialog
+          project={deleteTarget}
+          onConfirm={handleConfirmDelete}
+          onCancel={() => setDeleteTarget(null)}
+          deleting={deleting}
+        />
+      )}
+
+      {showNewProject && (
+        <NewProjectDialog
+          onCreate={(name, template) => void handleCreateProject(name, template)}
+          onCancel={() => {
+            if (creating) return;
+            setShowNewProject(false);
+            setCreateError(null);
+          }}
+          creating={creating}
+          error={createError}
+        />
+      )}
+
+      <aside
+        className="flex h-full flex-shrink-0 flex-col overflow-hidden border-r border-[#30363d] bg-[#0d1117]"
+        style={{ width }}
+      >
+        <div className="flex items-center gap-2.5 px-4 py-4 flex-shrink-0">
+          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-violet-500 to-indigo-600 shadow-lg shadow-violet-500/20">
+            <Cpu className="h-4 w-4 text-white" />
+          </div>
+          <div>
+            <p className="text-sm font-semibold text-white leading-none">LibreLane</p>
+            <p className="text-[10px] text-slate-500 mt-0.5">AI Design Agent</p>
+          </div>
+        </div>
+
+        <div className="flex-1 overflow-y-auto">
+          <CollapsibleSection
+            title="Projeler"
+            icon={<FolderOpen className="h-3.5 w-3.5" />}
+            defaultOpen={true}
+            action={
+              <div className="flex items-center gap-1">
+                <button
+                  onClick={() => loadProjectsFromWorkspace()}
+                  disabled={loadingProjects}
+                  className="flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-white/8 hover:text-slate-300 transition-colors disabled:opacity-40"
+                  title="Workspace'ten yenile"
+                >
+                  {loadingProjects ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <svg className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+                      <path
+                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      />
+                    </svg>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowNewProject(true);
+                    setCreateError(null);
+                  }}
+                  className="flex h-5 w-5 items-center justify-center rounded text-slate-500 hover:bg-white/8 hover:text-violet-400 transition-colors"
+                  title="Yeni proje"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              </div>
+            }
+          >
+            <div className="px-2 space-y-0.5">
+              {loadingProjects && projects.length === 0 && (
+                <div className="flex items-center gap-1.5 px-2 py-3 text-[11px] text-slate-600">
+                  <Loader2 className="h-3 w-3 animate-spin" />
+                  <span>Bucket'lar yükleniyor...</span>
+                </div>
+              )}
+
+              {!loadingProjects && projects.length === 0 && !showNewProject && (
+                <p className="px-2 py-3 text-center text-[11px] text-slate-600">Henüz proje yok. + ile ekle.</p>
+              )}
+
+              {projects.map((project) => (
+                <div
+                  key={project.id}
+                  className={cn(
+                    "group flex items-center gap-2 rounded-lg px-2 py-2 cursor-pointer transition-all",
+                    activeProjectId === project.id
+                      ? "bg-violet-500/15 text-violet-300"
+                      : "text-slate-400 hover:bg-white/5 hover:text-slate-200"
+                  )}
+                  onClick={() => {
+                    onProjectChange(project.id);
+                    saveActiveProjectId(project.id);
+                  }}
+                >
+                  <FolderOpen
+                    className={cn(
+                      "h-4 w-4 flex-shrink-0",
+                      activeProjectId === project.id ? "text-violet-400" : "text-slate-500"
+                    )}
+                  />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm truncate font-medium">{project.name}</p>
+                    <p className="text-[10px] text-slate-600 truncate">{project.bucket}</p>
+                  </div>
+                  {activeProjectId === project.id && <ChevronRight className="h-3 w-3 text-violet-400 flex-shrink-0" />}
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      setDeleteTarget(project);
+                    }}
+                    className={cn(
+                      "h-5 w-5 items-center justify-center rounded text-slate-600 hover:text-red-400 transition-colors flex-shrink-0",
+                      activeProjectId === project.id ? "flex" : "hidden group-hover:flex"
+                    )}
+                    title="Projeyi sil"
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          </CollapsibleSection>
+
+          {activeProject && (
+            <CollapsibleSection title="Dosya Gezgini" icon={<Files className="h-3.5 w-3.5" />} defaultOpen={true}>
+              <FileBrowser bucket={activeProject.bucket} onOpenFile={(node) => onOpenFile(node, activeProject.bucket)} />
+            </CollapsibleSection>
+          )}
+
+          <CollapsibleSection title="Ayarlar" icon={<Settings2 className="h-3.5 w-3.5" />} defaultOpen={false}>
+            <div className="space-y-2 px-4 pt-1 pb-2">
+              <button
+                type="button"
+                onClick={onOpenOllamaSettings}
+                className="w-full rounded-lg border border-[#30363d] bg-white/5 px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:border-violet-500/40 hover:bg-violet-500/10"
+              >
+                <span className="font-medium text-violet-300">Ollama ayarları</span>
+                <p className="mt-0.5 text-[10px] text-slate-500">Model, host ve süreçler — yeni sekmede düzenle</p>
+              </button>
+              <button
+                type="button"
+                onClick={onOpenSystemMetrics}
+                className="w-full rounded-lg border border-[#30363d] bg-white/5 px-3 py-2 text-left text-xs text-slate-200 transition-colors hover:border-emerald-500/40 hover:bg-emerald-500/10"
+              >
+                <span className="font-medium text-emerald-300">Sistem metrikleri</span>
+                <p className="mt-0.5 text-[10px] text-slate-500">
+                  CPU, RAM, disk, GPU ve ağ — yeni sekmede canlı izleme
+                </p>
+              </button>
+            </div>
+          </CollapsibleSection>
+        </div>
+      </aside>
+    </>
+  );
+}

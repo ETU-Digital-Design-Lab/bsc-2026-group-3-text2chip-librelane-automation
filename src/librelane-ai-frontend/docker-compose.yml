@@ -1,0 +1,33 @@
+# Next.js — örn. http://127.0.0.1:3000
+#
+# Ağ: web + backend `librelane-network` üzerindeyse birbirini container_name ile görür
+# (DNS: librelane-web, librelane-backend).
+# Önce: docker network create librelane-network
+# Sıra önerisi: backend → web.
+#
+# Host üzerinden haberleşme (geçici / dev): tarayıcı → localhost:3000 → web; web →
+# host.docker.internal:8001 da mümkün ama aynı ağdaysa librelane-backend:8001 tercih.
+
+services:
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: librelane-web
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    env_file:
+      - .env
+    environment:
+      WORKSPACE_BACKEND: http://host.docker.internal:8001
+      NEXT_PUBLIC_WORKSPACE_BACKEND: http://127.0.0.1:8001
+    networks:
+      - librelane-network
+    extra_hosts:
+      # Backend sadece host’ta çalışıyorsa yedek rota (Linux: host-gateway)
+      - "host.docker.internal:host-gateway"
+
+networks:
+  librelane-network:
+    external: true
